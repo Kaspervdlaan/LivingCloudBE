@@ -16,9 +16,18 @@ const app = express();
 const PORT = process.env.API_PORT || 3001;
 
 // CORS configuration
+const allowedOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(',')
+  : [
+      'http://localhost:5173',
+      'http://localhost:3000',
+      'http://localhost:5174',
+      'https://livingcloud.netlify.app',
+    ];
+
 app.use(
   cors({
-    origin: ['http://localhost:5173', 'http://localhost:3000', 'http://localhost:5174'], // Vite dev server ports
+    origin: allowedOrigins,
     credentials: true,
   })
 );

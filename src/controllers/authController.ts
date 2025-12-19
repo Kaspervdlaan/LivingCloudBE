@@ -96,6 +96,9 @@ export async function register(req: Request, res: Response, next: NextFunction):
     if (existingUser.rows.length > 0) {
       res.status(409).json({ error: { message: 'User with this email already exists', statusCode: 409 } });
       return;
+    }
+
+    // Hash password
     const passwordHash = await hashPassword(password);
 
     // Create user
