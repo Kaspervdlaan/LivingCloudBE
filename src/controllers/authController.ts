@@ -1,0 +1,225 @@
+import { Request, Response, NextFunction } from 'express';
+import { getPool } from '../config/database';
+import { User, UserRow, rowToUser } from '../models/User';
+import { RegisterRequest, LoginRequest, AuthResponse } from '../types/auth';
+import { hashPassword, comparePassword, generateToken } from '../utils/auth';
+import { body, validationResult } from 'express-validator';
+import passport from 'passport';
+import { Strategy as GoogleStrategy, Profile } from 'passport-google-oauth20';
+
+// Configure Google OAuth Strategy
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+const GOOGLE_CALLBACK_URL = process.env.GOOGLE_CALLBACK_URL || 'http://localhost:3001/api/auth/google/callback';
+
+if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
+  passport.use(
+    new GoogleStrategy(
+      {
+        clientID: GOOGLE_CLIENT_ID,
+        clientSecret: GOOGLE_CLIENT_SECRET,
+        callbackURL: GOOGLE_CALLBACK_URL,
+      },
+      async (accessToken: string, refreshToken: string, profile: Profile, done: (error: any, user?: any) => void) => {
+        try {
+          const pool = getPool();
+          const email = (profile.emails && profile.emails[0]) ? profile.emails[0].value : undefined;
+          
+          if (!email) {
+            return done(new Error('No email found in Google profile'));
+          }
+
+          // Check if user exists with this Google ID
+          let userResult = await pool.query('SELECT * FROM users WHERE google_id = $1', [profile.id]);
+          
+          if (userResult.rows.length > 0) {
+            // User exists, return it
+            return done(null, rowToUser(userResult.rows[0] as UserRow));
+          }
+
+          // Check if user exists with this email
+          userResult = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+          
+          if (userResult.rows.length > 0) {
+            // User exists but doesn't have Google ID, update it
+            await pool.query(
+              'UPDATE users SET google_id = $1, avatar_url = $2 WHERE email = $3',
+              [profile.id, profile.photos?.[0]?.value || null, email]
+            );
+            const updatedUser = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+            return done(null, rowToUser(updatedUser.rows[0] as UserRow));
+          }
+
+          // Create new user
+          const newUserResult = await pool.query(
+            'INSERT INTO users (email, name, google_id, avatar_url) VALUES ($1, $2, $3, $4) RETURNING *',
+            [email, profile.displayName, profile.id, profile.photos?.[0]?.value || null]
+          );
+          
+          return done(null, rowToUser(newUserResult.rows[0] as UserRow));
+        } catch (error) {
+          return done(error);
+        }
+      }
+    )
+  );
+}
+
+// Validation rules
+export const registerValidation = [
+  body('email').isEmail().normalizeEmail(),
+  body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+  body('name').trim().isLength({ min: 1 }).withMessage('Name is required'),
+];
+
+export const loginValidation = [
+  body('email').isEmail().normalizeEmail(),
+  body('password').notEmpty().withMessage('Password is required'),
+];
+
+/**
+ * Register a new user
+ */
+export async function register(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ error: { message: errors.array()[0].msg, statusCode: 400 } });
+      return;
+    }
+
+    const { email, password, name }: RegisterRequest = req.body;
+    const pool = getPool();
+
+    // Check if user already exists
+    const existingUser = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    if (existingUser.rows.length > 0) {
+      res.status(409).json({ error: { message: 'User with this email already exists', statusCode: 409 } });
+      return;
+    }
+
+    // Hash password
+    const passwordHash = await hashPassword(password);
+
+    // Create user
+    const result = await pool.query(
+      'INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING *',
+      [email, passwordHash, name]
+    );
+
+    const user = rowToUser(result.rows[0] as UserRow);
+    const token = generateToken(user.id, user.email);
+
+    const response: AuthResponse = { user, token };
+    res.status(201).json({ data: response });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Login user
+ */
+export async function login(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ error: { message: errors.array()[0].msg, statusCode: 400 } });
+      return;
+    }
+
+    const { email, password }: LoginRequest = req.body;
+    const pool = getPool();
+
+    // Find user by email
+    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    
+    if (result.rows.length === 0) {
+      res.status(401).json({ error: { message: 'Invalid email or password', statusCode: 401 } });
+      return;
+    }
+
+    const userRow = result.rows[0] as UserRow;
+
+    // Check if user has a password (not OAuth-only user)
+    if (!userRow.password_hash) {
+      res.status(401).json({ error: { message: 'Please sign in with Google', statusCode: 401 } });
+      return;
+    }
+
+    // Verify password
+    const isValidPassword = await comparePassword(password, userRow.password_hash);
+    
+    if (!isValidPassword) {
+      res.status(401).json({ error: { message: 'Invalid email or password', statusCode: 401 } });
+      return;
+    }
+
+    const user = rowToUser(userRow);
+    const token = generateToken(user.id, user.email);
+
+    const response: AuthResponse = { user, token };
+    res.json({ data: response });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Initiate Google OAuth flow
+ */
+export function googleAuth(req: Request, res: Response, next: NextFunction): void {
+  passport.authenticate('google', {
+    scope: ['profile', 'email'],
+  })(req, res, next);
+}
+
+/**
+ * Handle Google OAuth callback
+ */
+export async function googleCallback(req: Request, res: Response, next: NextFunction): Promise<void> {
+  passport.authenticate('google', { session: false }, async (err: any, user: User) => {
+    if (err) {
+      return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/login?error=oauth_failed`);
+    }
+
+    if (!user) {
+      return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/login?error=oauth_failed`);
+    }
+
+    try {
+      const token = generateToken(user.id, user.email);
+      // Redirect to frontend with token
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      res.redirect(`${frontendUrl}/auth/callback?token=${token}`);
+    } catch (error) {
+      res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/login?error=token_generation_failed`);
+    }
+  })(req, res, next);
+}
+
+/**
+ * Get current authenticated user
+ */
+export async function getCurrentUser(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    if (!req.user) {
+      res.status(401).json({ error: { message: 'Not authenticated', statusCode: 401 } });
+      return;
+    }
+
+    const pool = getPool();
+    const result = await pool.query('SELECT * FROM users WHERE id = $1', [req.user.userId]);
+    
+    if (result.rows.length === 0) {
+      res.status(404).json({ error: { message: 'User not found', statusCode: 404 } });
+      return;
+    }
+
+    const user = rowToUser(result.rows[0] as UserRow);
+    res.json({ data: user });
+  } catch (error) {
+    next(error);
+  }
+}
+

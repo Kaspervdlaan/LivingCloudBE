@@ -1,8 +1,10 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import passport from 'passport';
 import { initializeDatabase } from './config/database';
 import filesRoutes from './routes/filesRoutes';
+import authRoutes from './routes/authRoutes';
 import { createFolder } from './controllers/filesController';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { ensureDirectoryExists } from './utils/fileUtils';
@@ -25,12 +27,16 @@ app.use(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Initialize Passport
+app.use(passport.initialize());
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
 // API routes
+app.use('/api/auth', authRoutes);
 app.use('/api/files', filesRoutes);
 app.post('/api/folders', createFolder); // Separate route for folder creation
 

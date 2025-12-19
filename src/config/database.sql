@@ -39,3 +39,25 @@ $$ language 'plpgsql';
 CREATE TRIGGER update_files_updated_at BEFORE UPDATE ON files
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+-- Create users table
+CREATE TABLE IF NOT EXISTS users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password_hash VARCHAR(255),
+    name VARCHAR(255) NOT NULL,
+    google_id VARCHAR(255) UNIQUE,
+    avatar_url VARCHAR(500),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create index on email for faster lookups
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+
+-- Create index on google_id for OAuth lookups
+CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id);
+
+-- Create trigger to automatically update updated_at for users
+CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
