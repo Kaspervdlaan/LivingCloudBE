@@ -51,16 +51,35 @@ export async function getFiles(req: Request, res: Response, next: NextFunction):
     }
 
     const parentId = req.query.parentId as string | undefined;
+    const userId = req.query.userId as string | undefined; // For admin to view specific user's files
     const pool = getPool();
     
-    // Build user filter (admin bypasses)
-    const userFilter = buildUserFilter(req, 1);
-    let query = 'SELECT * FROM files WHERE 1=1' + userFilter.clause;
-    const params: any[] = [...userFilter.params];
+    // Build user filter
+    let userFilterClause = '';
+    let params: any[] = [];
+    let paramIndex = 1;
+    
+    if (isAdmin(req)) {
+      // Admin can view any user's files if userId is provided, otherwise all files
+      if (userId) {
+        userFilterClause = ` AND user_id = $${paramIndex}`;
+        params.push(userId);
+        paramIndex++;
+      }
+      // If no userId provided, admin sees all files (no filter)
+    } else {
+      // Regular users can only see their own files
+      userFilterClause = ` AND user_id = $${paramIndex}`;
+      params.push(req.user.userId);
+      paramIndex++;
+    }
+    
+    let query = 'SELECT * FROM files WHERE 1=1' + userFilterClause;
     
     if (parentId) {
-      query += ` AND parent_id = $${params.length + 1}`;
+      query += ` AND parent_id = $${paramIndex}`;
       params.push(parentId);
+      paramIndex++;
     } else {
       query += ' AND parent_id IS NULL';
     }

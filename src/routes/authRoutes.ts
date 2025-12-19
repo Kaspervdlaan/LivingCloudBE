@@ -5,6 +5,7 @@ import {
   googleAuth,
   googleCallback,
   getCurrentUser,
+  getAllUsers,
   registerValidation,
   loginValidation,
 } from '../controllers/authController';
@@ -24,6 +25,9 @@ router.get('/google/callback', googleCallback);
 
 // Get current user (protected)
 router.get('/me', authenticate, getCurrentUser);
+
+// Get all users (admin only)
+router.get('/users', authenticate, getAllUsers);
 
 export default router;
 

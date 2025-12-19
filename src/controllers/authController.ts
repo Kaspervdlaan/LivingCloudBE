@@ -246,3 +246,29 @@ export async function getCurrentUser(req: Request, res: Response, next: NextFunc
   }
 }
 
+/**
+ * Get all users (admin only)
+ */
+export async function getAllUsers(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    if (!req.user) {
+      res.status(401).json({ error: { message: 'Not authenticated', statusCode: 401 } });
+      return;
+    }
+
+    // Only admins can access this endpoint
+    if (req.user.role !== 'admin') {
+      res.status(403).json({ error: { message: 'Forbidden: Admin access required', statusCode: 403 } });
+      return;
+    }
+
+    const pool = getPool();
+    const result = await pool.query('SELECT * FROM users ORDER BY name ASC, email ASC');
+    
+    const users = result.rows.map((row: UserRow) => rowToUser(row));
+    res.json({ data: users });
+  } catch (error) {
+    next(error);
+  }
+}
+
