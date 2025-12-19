@@ -42,6 +42,50 @@ export async function initializeDatabase(): Promise<void> {
     
     // Execute SQL - errors for existing objects are handled in the SQL itself
     await client.query(sql);
+    
+    // Add user_id column to files table if it doesn't exist (migration for existing databases)
+    await client.query(`
+      DO $$ 
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'files' AND column_name = 'user_id'
+        ) THEN
+          -- Add column as nullable first
+          ALTER TABLE files ADD COLUMN user_id UUID REFERENCES users(id) ON DELETE CASCADE;
+          CREATE INDEX IF NOT EXISTS idx_files_user_id ON files(user_id);
+          
+          -- If table is empty, make it NOT NULL (matches schema)
+          IF (SELECT COUNT(*) FROM files) = 0 THEN
+            ALTER TABLE files ALTER COLUMN user_id SET NOT NULL;
+          END IF;
+        END IF;
+      END $$;
+    `);
+    
+    // Add role enum type if it doesn't exist
+    await client.query(`
+      DO $$ 
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
+          CREATE TYPE user_role AS ENUM ('user', 'admin');
+        END IF;
+      END $$;
+    `);
+    
+    // Add role column to users table if it doesn't exist (migration for existing databases)
+    await client.query(`
+      DO $$ 
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'users' AND column_name = 'role'
+        ) THEN
+          ALTER TABLE users ADD COLUMN role user_role NOT NULL DEFAULT 'user';
+        END IF;
+      END $$;
+    `);
+    
     console.log('Database schema initialized successfully');
   } catch (error: any) {
     // If it's a "already exists" error, that's okay - schema is already initialized

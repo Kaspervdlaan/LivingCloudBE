@@ -4,6 +4,7 @@ export interface FileRow {
   name: string;
   type: 'file' | 'folder';
   parent_id: string | null;
+  user_id: string;
   size: number | null;
   mime_type: string | null;
   extension: string | null;

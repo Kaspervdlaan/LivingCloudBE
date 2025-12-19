@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { verifyToken } from '../utils/auth';
+import { getPool } from '../config/database';
 
 // Extend Express Request to include user info
 declare module 'express-serve-static-core' {
@@ -7,6 +8,7 @@ declare module 'express-serve-static-core' {
     user?: {
       userId: string;
       email: string;
+      role: 'user' | 'admin';
     };
   }
 }
@@ -14,7 +16,7 @@ declare module 'express-serve-static-core' {
 /**
  * Authentication middleware to verify JWT token
  */
-export function authenticate(req: Request, res: Response, next: NextFunction): void {
+export async function authenticate(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     // Get token from Authorization header
     const authHeader = req.headers.authorization;
@@ -33,10 +35,25 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
       return;
     }
 
+    // Fetch user role from database
+    const pool = getPool();
+    const userResult = await pool.query(
+      'SELECT role FROM users WHERE id = $1',
+      [payload.userId]
+    );
+    
+    if (userResult.rows.length === 0) {
+      res.status(401).json({ error: { message: 'User not found', statusCode: 401 } });
+      return;
+    }
+
+    const role = userResult.rows[0].role as 'user' | 'admin';
+
     // Attach user info to request
     req.user = {
       userId: payload.userId,
       email: payload.email,
+      role: role,
     };
 
     next();
@@ -48,7 +65,7 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
 /**
  * Optional authentication middleware (doesn't fail if no token)
  */
-export function optionalAuthenticate(req: Request, res: Response, next: NextFunction): void {
+export async function optionalAuthenticate(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const authHeader = req.headers.authorization;
     
@@ -57,10 +74,21 @@ export function optionalAuthenticate(req: Request, res: Response, next: NextFunc
       const payload = verifyToken(token);
       
       if (payload) {
-        req.user = {
-          userId: payload.userId,
-          email: payload.email,
-        };
+        // Fetch user role from database
+        const pool = getPool();
+        const userResult = await pool.query(
+          'SELECT role FROM users WHERE id = $1',
+          [payload.userId]
+        );
+        
+        if (userResult.rows.length > 0) {
+          const role = userResult.rows[0].role as 'user' | 'admin';
+          req.user = {
+            userId: payload.userId,
+            email: payload.email,
+            role: role,
+          };
+        }
       }
     }
     

@@ -48,7 +48,7 @@ app.get('/health', (req, res) => {
 // API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/files', filesRoutes);
-app.post('/api/folders', createFolder); // Separate route for folder creation
+// Note: /api/files/folders route is handled by filesRoutes with authentication
 
 // Error handling
 app.use(notFoundHandler);

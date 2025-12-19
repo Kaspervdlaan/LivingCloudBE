@@ -6,6 +6,7 @@ export interface UserRow {
   name: string;
   google_id: string | null;
   avatar_url: string | null;
+  role: 'user' | 'admin';
   created_at: Date;
   updated_at: Date;
 }
@@ -16,6 +17,7 @@ export interface User {
   email: string;
   name: string;
   avatarUrl?: string;
+  role: 'user' | 'admin';
   createdAt: string;
   updatedAt: string;
 }
@@ -26,6 +28,7 @@ export function rowToUser(row: UserRow): User {
     id: row.id,
     email: row.email,
     name: row.name,
+    role: row.role,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };

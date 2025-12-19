@@ -11,8 +11,12 @@ import {
   downloadFile,
 } from '../controllers/filesController';
 import { upload } from '../middleware/upload';
+import { authenticate } from '../middleware/auth';
 
 const router = Router();
+
+// All file routes require authentication
+router.use(authenticate);
 
 // Get files (list)
 router.get('/', getFiles);
