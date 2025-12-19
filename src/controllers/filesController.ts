@@ -31,7 +31,7 @@ export async function getFiles(req: Request, res: Response, next: NextFunction):
       query += ' parent_id IS NULL';
     }
     
-    query += ' ORDER BY type DESC, name ASC';
+    query += ' ORDER BY type DESC, created_at ASC';
     
     const result = await pool.query(query, params);
     const baseUrl = getBaseUrl(req);
