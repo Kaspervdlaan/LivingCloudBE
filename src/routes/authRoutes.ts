@@ -6,6 +6,7 @@ import {
   googleCallback,
   getCurrentUser,
   getAllUsers,
+  deleteUser,
   registerValidation,
   loginValidation,
 } from '../controllers/authController';
@@ -28,6 +29,9 @@ router.get('/me', authenticate, getCurrentUser);
 
 // Get all users (admin only)
 router.get('/users', authenticate, getAllUsers);
+
+// Delete user (admin only)
+router.delete('/users/:id', authenticate, deleteUser);
 
 export default router;
 

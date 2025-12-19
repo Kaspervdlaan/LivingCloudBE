@@ -272,3 +272,74 @@ export async function getAllUsers(req: Request, res: Response, next: NextFunctio
   }
 }
 
+/**
+ * Delete a user (admin only)
+ */
+export async function deleteUser(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    if (!req.user) {
+      res.status(401).json({ error: { message: 'Not authenticated', statusCode: 401 } });
+      return;
+    }
+
+    // Only admins can access this endpoint
+    if (req.user.role !== 'admin') {
+      res.status(403).json({ error: { message: 'Forbidden: Admin access required', statusCode: 403 } });
+      return;
+    }
+
+    const { id } = req.params;
+    const pool = getPool();
+
+    // Prevent admin from deleting themselves
+    if (id === req.user.userId) {
+      res.status(400).json({ error: { message: 'Cannot delete your own account', statusCode: 400 } });
+      return;
+    }
+
+    // Check if user exists
+    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
+    if (userResult.rows.length === 0) {
+      res.status(404).json({ error: { message: 'User not found', statusCode: 404 } });
+      return;
+    }
+
+    // Get all files owned by this user to delete from filesystem
+    const filesResult = await pool.query(
+      'SELECT file_path, thumbnail_path FROM files WHERE user_id = $1',
+      [id]
+    );
+
+    // Delete physical files from filesystem
+    const { deleteFile } = await import('../utils/fileUtils');
+    const uploadDir = process.env.UPLOAD_DIR || './storage/uploads';
+    const thumbnailDir = process.env.THUMBNAIL_DIR || './storage/thumbnails';
+    
+    for (const file of filesResult.rows) {
+      if (file.file_path) {
+        try {
+          await deleteFile(file.file_path);
+        } catch (err) {
+          console.error(`Failed to delete file ${file.file_path}:`, err);
+          // Continue with deletion even if file deletion fails
+        }
+      }
+      if (file.thumbnail_path) {
+        try {
+          await deleteFile(file.thumbnail_path);
+        } catch (err) {
+          console.error(`Failed to delete thumbnail ${file.thumbnail_path}:`, err);
+          // Continue with deletion even if thumbnail deletion fails
+        }
+      }
+    }
+    
+    // Delete the user (this will cascade delete files from database)
+    await pool.query('DELETE FROM users WHERE id = $1', [id]);
+    
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+}
+
