@@ -75,10 +75,14 @@ export function rowToFile(row: FileRow, baseUrl: string = ''): File {
     if (row.file_path) {
       // Generate download URL
       file.downloadUrl = `${baseUrl}/api/files/${row.id}/download`;
-    }
-    if (row.thumbnail_path) {
-      // Generate thumbnail URL
-      file.thumbnailUrl = `${baseUrl}/api/files/${row.id}/thumbnail`;
+      
+      // For images, use download URL as thumbnail URL (until we implement thumbnail generation)
+      if (row.mime_type && row.mime_type.startsWith('image/')) {
+        file.thumbnailUrl = file.downloadUrl;
+      } else if (row.thumbnail_path) {
+        // If thumbnail exists, use it (for future thumbnail generation)
+        file.thumbnailUrl = `${baseUrl}/api/files/${row.id}/thumbnail`;
+      }
     }
   }
 

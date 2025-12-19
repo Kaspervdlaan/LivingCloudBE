@@ -40,11 +40,17 @@ export async function initializeDatabase(): Promise<void> {
     
     const sql = fs.readFileSync(sqlPath, 'utf8');
     
+    // Execute SQL - errors for existing objects are handled in the SQL itself
     await client.query(sql);
     console.log('Database schema initialized successfully');
-  } catch (error) {
-    console.error('Error initializing database:', error);
-    throw error;
+  } catch (error: any) {
+    // If it's a "already exists" error, that's okay - schema is already initialized
+    if (error.code === '42710' || error.code === '42P07') {
+      console.log('Database schema already exists, skipping initialization');
+    } else {
+      console.error('Error initializing database:', error);
+      throw error;
+    }
   } finally {
     client.release();
   }

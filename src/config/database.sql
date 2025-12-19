@@ -1,5 +1,9 @@
--- Create enum type for file type
-CREATE TYPE file_type AS ENUM ('file', 'folder');
+-- Create enum type for file type (if not exists)
+DO $$ BEGIN
+    CREATE TYPE file_type AS ENUM ('file', 'folder');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
 
 -- Create files table
 CREATE TABLE IF NOT EXISTS files (
