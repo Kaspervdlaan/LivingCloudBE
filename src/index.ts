@@ -17,12 +17,13 @@ const PORT = process.env.API_PORT || 3001;
 
 // CORS configuration
 const allowedOrigins = process.env.CORS_ORIGINS
-  ? process.env.CORS_ORIGINS.split(',')
+  ? process.env.CORS_ORIGINS.split(',').map(origin => origin.trim())
+  : process.env.NODE_ENV === 'production'
+  ? ['https://livingcloud.netlify.app']
   : [
       'http://localhost:5173',
       'http://localhost:3000',
       'http://localhost:5174',
-      'https://livingcloud.netlify.app',
     ];
 
 app.use(
