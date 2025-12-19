@@ -6,6 +6,20 @@ let pool: Pool | null = null;
 
 export function getPool(): Pool {
   if (!pool) {
+    const isProduction = process.env.NODE_ENV === 'production';
+    
+    // In production, require all database environment variables
+    if (isProduction) {
+      const requiredVars = ['DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASSWORD'];
+      const missingVars = requiredVars.filter(varName => !process.env[varName]);
+      
+      if (missingVars.length > 0) {
+        throw new Error(
+          `Missing required database environment variables in production: ${missingVars.join(', ')}`
+        );
+      }
+    }
+    
     const config = {
       host: process.env.DB_HOST || 'postgres',
       port: parseInt(process.env.DB_PORT || '5432'),
@@ -13,6 +27,11 @@ export function getPool(): Pool {
       user: process.env.DB_USER || 'drive_user',
       password: process.env.DB_PASSWORD || 'drive_password',
     };
+    
+    // Warn if using default credentials in production
+    if (isProduction && (config.password === 'drive_password' || config.user === 'drive_user')) {
+      console.warn('⚠️  WARNING: Using default database credentials in production is insecure!');
+    }
 
     pool = new Pool(config);
 

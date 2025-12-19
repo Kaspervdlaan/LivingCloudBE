@@ -70,3 +70,45 @@ export async function getFileSize(filePath: string): Promise<number> {
   return stats.size;
 }
 
+/**
+ * Validate that a file path is within the allowed directory (prevents path traversal)
+ */
+export function validateFilePath(filePath: string, allowedDir: string): boolean {
+  try {
+    const resolvedPath = path.resolve(filePath);
+    const resolvedDir = path.resolve(allowedDir);
+    
+    // Check if the resolved path starts with the resolved directory
+    return resolvedPath.startsWith(resolvedDir + path.sep) || resolvedPath === resolvedDir;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Sanitize file/folder name to prevent path traversal and other issues
+ */
+export function sanitizeFileName(fileName: string): string {
+  // Remove or replace dangerous characters
+  let sanitized = fileName
+    .replace(/[<>:"|?*\x00-\x1F]/g, '') // Remove illegal characters
+    .replace(/\.\./g, '') // Remove path traversal attempts
+    .replace(/^\.+/, '') // Remove leading dots
+    .trim();
+  
+  // Ensure name is not empty
+  if (!sanitized || sanitized.length === 0) {
+    sanitized = 'unnamed';
+  }
+  
+  // Limit length to prevent issues
+  const maxLength = 255;
+  if (sanitized.length > maxLength) {
+    const ext = path.extname(sanitized);
+    const nameWithoutExt = sanitized.slice(0, maxLength - ext.length);
+    sanitized = nameWithoutExt + ext;
+  }
+  
+  return sanitized;
+}
+

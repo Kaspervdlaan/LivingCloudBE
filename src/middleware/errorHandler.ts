@@ -12,12 +12,20 @@ export function errorHandler(
   next: NextFunction
 ): void {
   const statusCode = err.statusCode || err.status || 500;
-  const message = err.message || 'Internal Server Error';
+  const isDevelopment = process.env.NODE_ENV === 'development';
+  
+  // Never expose stack traces in production
+  const message = isDevelopment 
+    ? (err.message || 'Internal Server Error')
+    : statusCode === 500 
+      ? 'Internal Server Error' 
+      : (err.message || 'An error occurred');
 
+  // Log full error details server-side
   console.error('Error:', {
     statusCode,
-    message,
-    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+    message: err.message || 'Internal Server Error',
+    stack: err.stack,
     path: req.path,
     method: req.method,
   });
@@ -26,7 +34,8 @@ export function errorHandler(
     error: {
       message,
       statusCode,
-      ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
+      // Only include stack trace in development
+      ...(isDevelopment && err.stack && { stack: err.stack }),
     },
   });
 }

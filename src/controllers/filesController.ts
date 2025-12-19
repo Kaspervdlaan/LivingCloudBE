@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { getPool } from '../config/database';
 import { File, FileRow, rowToFile, CreateFolderRequest, RenameRequest, MoveRequest, CopyRequest } from '../models/File';
-import { deleteFile, copyFile as copyFileToPath, getFileExtension, ensureDirectoryExists } from '../utils/fileUtils';
+import { deleteFile, copyFile as copyFileToPath, getFileExtension, ensureDirectoryExists, validateFilePath, sanitizeFileName } from '../utils/fileUtils';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 
@@ -179,6 +179,14 @@ export async function createFolder(req: Request, res: Response, next: NextFuncti
       return;
     }
     
+    // Sanitize folder name to prevent path traversal and other issues
+    const sanitizedName = sanitizeFileName(name.trim());
+    
+    if (!sanitizedName || sanitizedName.length === 0) {
+      res.status(400).json({ error: { message: 'Invalid folder name', statusCode: 400 } });
+      return;
+    }
+    
     const pool = getPool();
     const userId = req.user.userId;
     
@@ -197,7 +205,7 @@ export async function createFolder(req: Request, res: Response, next: NextFuncti
     
     const result = await pool.query(
       'INSERT INTO files (name, type, parent_id, user_id, created_at, updated_at) VALUES ($1, $2, $3, $4, NOW(), NOW()) RETURNING *',
-      [name.trim(), 'folder', parentId || null, userId]
+      [sanitizedName, 'folder', parentId || null, userId]
     );
     
     const baseUrl = getBaseUrl(req);
@@ -225,6 +233,14 @@ export async function renameFile(req: Request, res: Response, next: NextFunction
       return;
     }
     
+    // Sanitize file/folder name to prevent path traversal and other issues
+    const sanitizedName = sanitizeFileName(name.trim());
+    
+    if (!sanitizedName || sanitizedName.length === 0) {
+      res.status(400).json({ error: { message: 'Invalid name', statusCode: 400 } });
+      return;
+    }
+    
     const pool = getPool();
     const userId = req.user.userId;
     
@@ -237,7 +253,7 @@ export async function renameFile(req: Request, res: Response, next: NextFunction
     
     // Build update query (admin can update any file, regular users only their own)
     const userFilter = isAdmin(req) ? '' : ` AND user_id = $3`;
-    const updateParams: any[] = isAdmin(req) ? [name.trim(), id] : [name.trim(), id, userId];
+    const updateParams: any[] = isAdmin(req) ? [sanitizedName, id] : [sanitizedName, id, userId];
     
     const result = await pool.query(
       `UPDATE files SET name = $1, updated_at = NOW() WHERE id = $2${userFilter} RETURNING *`,
@@ -409,6 +425,12 @@ export async function downloadFile(req: Request, res: Response, next: NextFuncti
     
     if (file.type !== 'file' || !file.file_path) {
       res.status(400).json({ error: { message: 'Not a file or file path not found', statusCode: 400 } });
+      return;
+    }
+    
+    // Validate file path is within allowed directory (prevent path traversal)
+    if (!validateFilePath(file.file_path, uploadDir)) {
+      res.status(403).json({ error: { message: 'Invalid file path', statusCode: 403 } });
       return;
     }
     

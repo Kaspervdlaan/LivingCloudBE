@@ -68,7 +68,19 @@ if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
 // Validation rules
 export const registerValidation = [
   body('email').isEmail().normalizeEmail(),
-  body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+  body('password')
+    .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
+    .custom((value) => {
+      // Optional: Recommend complexity but don't require it
+      // Password should be at least 8 characters (already checked above)
+      // Optionally check for complexity (recommended but not enforced)
+      const hasComplexity = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(value);
+      if (!hasComplexity) {
+        // Warn but don't fail - complexity is recommended, not required
+        console.warn('Password does not meet complexity recommendations (uppercase, lowercase, number)');
+      }
+      return true;
+    }),
   body('name').trim().isLength({ min: 1 }).withMessage('Name is required'),
 ];
 
@@ -189,9 +201,20 @@ export async function googleCallback(req: Request, res: Response, next: NextFunc
 
     try {
       const token = generateToken(user.id, user.email);
-      // Redirect to frontend with token
+      // Set token in HTTP-only cookie for security (prevents XSS attacks)
       const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-      res.redirect(`${frontendUrl}/auth/callback?token=${token}`);
+      const isProduction = process.env.NODE_ENV === 'production';
+      
+      res.cookie('auth-token', token, {
+        httpOnly: true, // Prevents JavaScript access (XSS protection)
+        secure: isProduction, // Only send over HTTPS in production
+        sameSite: 'lax', // CSRF protection
+        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days (matches JWT_EXPIRES_IN default)
+        path: '/',
+      });
+      
+      // Redirect to frontend - token is now in cookie, not URL
+      res.redirect(`${frontendUrl}/auth/callback`);
     } catch (error) {
       res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/login?error=token_generation_failed`);
     }
