@@ -273,6 +273,36 @@ export async function getAllUsers(req: Request, res: Response, next: NextFunctio
   }
 }
 
+// Get users for sharing (available to all authenticated users)
+export async function getUsersForSharing(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    if (!req.user) {
+      res.status(401).json({ error: { message: 'Not authenticated', statusCode: 401 } });
+      return;
+    }
+
+    const pool = getPool();
+    // Return basic user info needed for sharing (exclude sensitive data like password_hash)
+    const result = await pool.query(
+      'SELECT id, email, name, avatar_url, role, created_at, updated_at FROM users ORDER BY name ASC, email ASC'
+    );
+    
+    const users = result.rows.map((row: any) => ({
+      id: row.id,
+      email: row.email,
+      name: row.name,
+      avatarUrl: row.avatar_url,
+      role: row.role,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+    
+    res.json({ data: users });
+  } catch (error) {
+    next(error);
+  }
+}
+
 /**
  * Delete a user (admin only)
  */

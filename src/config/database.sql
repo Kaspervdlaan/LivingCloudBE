@@ -77,3 +77,31 @@ CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id);
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+-- Create enum type for share permission (if not exists)
+DO $$ BEGIN
+    CREATE TYPE share_permission AS ENUM ('read', 'write');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+-- Create file_shares table for folder sharing
+CREATE TABLE IF NOT EXISTS file_shares (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    file_id UUID NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    shared_by_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    shared_with_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    permission share_permission NOT NULL DEFAULT 'read',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(file_id, shared_with_user_id)
+);
+
+-- Create indexes for faster queries
+CREATE INDEX IF NOT EXISTS idx_file_shares_file_id ON file_shares(file_id);
+CREATE INDEX IF NOT EXISTS idx_file_shares_shared_by ON file_shares(shared_by_user_id);
+CREATE INDEX IF NOT EXISTS idx_file_shares_shared_with ON file_shares(shared_with_user_id);
+
+-- Create trigger to automatically update updated_at for file_shares
+CREATE TRIGGER update_file_shares_updated_at BEFORE UPDATE ON file_shares
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+

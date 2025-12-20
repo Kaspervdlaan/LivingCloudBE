@@ -6,6 +6,7 @@ import {
   googleCallback,
   getCurrentUser,
   getAllUsers,
+  getUsersForSharing,
   deleteUser,
   registerValidation,
   loginValidation,
@@ -29,6 +30,9 @@ router.get('/me', authenticate, getCurrentUser);
 
 // Get all users (admin only)
 router.get('/users', authenticate, getAllUsers);
+
+// Get users for sharing (available to all authenticated users)
+router.get('/users/sharing', authenticate, getUsersForSharing);
 
 // Delete user (admin only)
 router.delete('/users/:id', authenticate, deleteUser);

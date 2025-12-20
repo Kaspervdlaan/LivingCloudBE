@@ -30,16 +30,79 @@ function buildUserFilter(req: Request, paramIndex: number = 1): { clause: string
   return { clause: ` AND user_id = $${paramIndex}`, params: [req.user!.userId] };
 }
 
-// Helper to check if file exists and user has access (belongs to user or user is admin)
+// Helper to check if file exists and user has access (belongs to user, is shared with user, or user is admin)
 async function checkFileAccess(pool: any, fileId: string, req: Request): Promise<FileRow | null> {
   if (isAdmin(req)) {
     // Admin can access any file (including deleted ones)
     const result = await pool.query('SELECT * FROM files WHERE id = $1', [fileId]);
     return result.rows.length > 0 ? (result.rows[0] as FileRow) : null;
   }
-  // Regular users can only access their own non-deleted files
-  const result = await pool.query('SELECT * FROM files WHERE id = $1 AND user_id = $2 AND deleted = FALSE', [fileId, req.user!.userId]);
+  
+  const userId = req.user!.userId;
+  
+  // Check if user owns the file, if it's directly shared, or if it's inside a shared folder
+  const result = await pool.query(
+    `WITH RECURSIVE accessible_folders AS (
+       -- Base case: folders owned by user or directly shared with user
+       SELECT id, parent_id
+       FROM files
+       WHERE deleted = FALSE
+       AND type = 'folder'
+       AND (
+         user_id = $2
+         OR EXISTS (
+           SELECT 1 FROM file_shares fs
+           WHERE fs.file_id = files.id
+           AND fs.shared_with_user_id = $2
+         )
+       )
+       
+       UNION
+       
+       -- Recursive case: all descendant folders of accessible folders
+       SELECT f.id, f.parent_id
+       FROM files f
+       INNER JOIN accessible_folders af ON f.parent_id = af.id
+       WHERE f.deleted = FALSE
+       AND f.type = 'folder'
+     )
+     SELECT f.* FROM files f
+     LEFT JOIN file_shares fs ON f.id = fs.file_id AND fs.shared_with_user_id = $2
+     WHERE f.id = $1 
+     AND f.deleted = FALSE
+     AND (
+       f.user_id = $2 
+       OR fs.id IS NOT NULL
+       OR EXISTS (
+         SELECT 1 FROM accessible_folders af
+         WHERE af.id = f.parent_id
+       )
+     )`,
+    [fileId, userId]
+  );
+  
   return result.rows.length > 0 ? (result.rows[0] as FileRow) : null;
+}
+
+// Helper to check if user has write access to a file (owner, shared with write permission, or admin)
+async function checkWriteAccess(pool: any, fileId: string, req: Request): Promise<boolean> {
+  if (isAdmin(req)) {
+    return true;
+  }
+  
+  const userId = req.user!.userId;
+  
+  // Check if user owns the file or has write permission via share
+  const result = await pool.query(
+    `SELECT f.id FROM files f
+     LEFT JOIN file_shares fs ON f.id = fs.file_id AND fs.shared_with_user_id = $2
+     WHERE f.id = $1 
+     AND f.deleted = FALSE
+     AND (f.user_id = $2 OR (fs.id IS NOT NULL AND fs.permission = 'write'))`,
+    [fileId, userId]
+  );
+  
+  return result.rows.length > 0;
 }
 
 // Get files (list files in a folder)
@@ -54,42 +117,95 @@ export async function getFiles(req: Request, res: Response, next: NextFunction):
     const userId = req.query.userId as string | undefined; // For admin to view specific user's files
     const pool = getPool();
     
-    // Build user filter
-    let userFilterClause = '';
+    // Build query to include owned files and shared files
+    let query = '';
     let params: any[] = [];
     let paramIndex = 1;
     
     if (isAdmin(req)) {
-      // Admin can view any user's files if userId is provided, otherwise all files
+      // Admin sees all files
+      query = 'SELECT DISTINCT f.* FROM files f WHERE 1=1';
       if (userId) {
-        userFilterClause = ` AND user_id = $${paramIndex}`;
+        query += ` AND f.user_id = $${paramIndex}`;
         params.push(userId);
         paramIndex++;
       }
-      // If no userId provided, admin sees all files (no filter)
+      if (parentId) {
+        query += ` AND f.parent_id = $${paramIndex}`;
+        params.push(parentId);
+        paramIndex++;
+      } else {
+        query += ' AND f.parent_id IS NULL';
+      }
     } else {
-      // Regular users can only see their own files
-      userFilterClause = ` AND user_id = $${paramIndex}`;
-      params.push(req.user.userId);
+      // Regular users see their own files, files shared with them, and files inside shared folders
+      const userId = req.user.userId;
+      params.push(userId);
       paramIndex++;
+      
+      if (parentId) {
+        // When viewing a specific folder, check if that folder is accessible (owned or shared)
+        // If accessible, show all files in it
+        query = `SELECT DISTINCT f.* FROM files f
+                 WHERE f.deleted = FALSE
+                 AND f.parent_id = $${paramIndex}
+                 AND EXISTS (
+                   SELECT 1 FROM files parent
+                   LEFT JOIN file_shares fs ON parent.id = fs.file_id AND fs.shared_with_user_id = $${paramIndex - 1}
+                   WHERE parent.id = $${paramIndex}
+                   AND parent.deleted = FALSE
+                   AND (parent.user_id = $${paramIndex - 1} OR fs.id IS NOT NULL)
+                 )`;
+        params.push(parentId);
+        paramIndex++;
+      } else {
+        // Root level: show owned files, directly shared files, and files in shared folders
+        query = `WITH RECURSIVE accessible_folders AS (
+                   -- Base case: folders owned by user or directly shared with user
+                   SELECT id, parent_id
+                   FROM files
+                   WHERE deleted = FALSE
+                   AND type = 'folder'
+                   AND (
+                     user_id = $${paramIndex - 1}
+                     OR EXISTS (
+                       SELECT 1 FROM file_shares fs
+                       WHERE fs.file_id = files.id
+                       AND fs.shared_with_user_id = $${paramIndex - 1}
+                     )
+                   )
+                   
+                   UNION
+                   
+                   -- Recursive case: all descendant folders of accessible folders
+                   SELECT f.id, f.parent_id
+                   FROM files f
+                   INNER JOIN accessible_folders af ON f.parent_id = af.id
+                   WHERE f.deleted = FALSE
+                   AND f.type = 'folder'
+                 )
+                 SELECT DISTINCT f.* FROM files f
+                 WHERE f.deleted = FALSE
+                 AND f.parent_id IS NULL
+                 AND (
+                   -- Owned by user
+                   f.user_id = $${paramIndex - 1}
+                   -- Or directly shared
+                   OR EXISTS (
+                     SELECT 1 FROM file_shares fs
+                     WHERE fs.file_id = f.id
+                     AND fs.shared_with_user_id = $${paramIndex - 1}
+                   )
+                   -- Or inside an accessible folder (shared or owned)
+                   OR EXISTS (
+                     SELECT 1 FROM accessible_folders af
+                     WHERE af.id = f.parent_id
+                   )
+                 )`;
+      }
     }
     
-    let query = 'SELECT * FROM files WHERE 1=1' + userFilterClause;
-    
-    // Regular users can't see deleted files, admins can see all
-    if (!isAdmin(req)) {
-      query += ` AND deleted = FALSE`;
-    }
-    
-    if (parentId) {
-      query += ` AND parent_id = $${paramIndex}`;
-      params.push(parentId);
-      paramIndex++;
-    } else {
-      query += ' AND parent_id IS NULL';
-    }
-    
-    query += ' ORDER BY type DESC, created_at ASC';
+    query += ' ORDER BY f.type DESC, f.created_at ASC';
     
     const result = await pool.query(query, params);
     const baseUrl = getBaseUrl(req);
@@ -477,6 +593,13 @@ export async function downloadFile(req: Request, res: Response, next: NextFuncti
       return;
     }
     
+    // Set CORS headers explicitly for file downloads
+    const origin = req.headers.origin;
+    if (origin) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
+    
     res.download(file.file_path, file.name);
   } catch (error) {
     next(error);
@@ -602,5 +725,203 @@ async function deleteFileRecursive(pool: any, file: FileRow, isAdminUser: boolea
     : 'DELETE FROM files WHERE id = $1 AND user_id = $2';
   const deleteParams = isAdminUser ? [file.id] : [file.id, file.user_id];
   await pool.query(deleteQuery, deleteParams);
+}
+
+// Share a folder with a user
+export async function shareFolder(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    if (!req.user?.userId) {
+      res.status(401).json({ error: { message: 'Authentication required', statusCode: 401 } });
+      return;
+    }
+
+    const { id } = req.params;
+    const { userId: sharedWithUserId, permission = 'read' } = req.body;
+    
+    if (!sharedWithUserId) {
+      res.status(400).json({ error: { message: 'User ID is required', statusCode: 400 } });
+      return;
+    }
+    
+    if (permission !== 'read' && permission !== 'write') {
+      res.status(400).json({ error: { message: 'Permission must be "read" or "write"', statusCode: 400 } });
+      return;
+    }
+    
+    const pool = getPool();
+    const sharedByUserId = req.user.userId;
+    
+    // Check if file exists and user owns it (or is admin)
+    const file = await checkFileAccess(pool, id, req);
+    if (!file) {
+      res.status(404).json({ error: { message: 'File not found', statusCode: 404 } });
+      return;
+    }
+    
+    // Only folders can be shared
+    if (file.type !== 'folder') {
+      res.status(400).json({ error: { message: 'Only folders can be shared', statusCode: 400 } });
+      return;
+    }
+    
+    // User must own the folder (or be admin) to share it
+    if (!isAdmin(req) && file.user_id !== sharedByUserId) {
+      res.status(403).json({ error: { message: 'You can only share folders you own', statusCode: 403 } });
+      return;
+    }
+    
+    // Can't share with yourself
+    if (sharedWithUserId === sharedByUserId) {
+      res.status(400).json({ error: { message: 'Cannot share folder with yourself', statusCode: 400 } });
+      return;
+    }
+    
+    // Check if user exists
+    const userResult = await pool.query('SELECT id FROM users WHERE id = $1', [sharedWithUserId]);
+    if (userResult.rows.length === 0) {
+      res.status(404).json({ error: { message: 'User not found', statusCode: 404 } });
+      return;
+    }
+    
+    // Create or update share (UPSERT)
+    const shareResult = await pool.query(
+      `INSERT INTO file_shares (file_id, shared_by_user_id, shared_with_user_id, permission, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, NOW(), NOW())
+       ON CONFLICT (file_id, shared_with_user_id)
+       DO UPDATE SET permission = $4, updated_at = NOW()
+       RETURNING *`,
+      [id, sharedByUserId, sharedWithUserId, permission]
+    );
+    
+    res.status(201).json({ data: shareResult.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// Unshare a folder with a user
+export async function unshareFolder(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    if (!req.user?.userId) {
+      res.status(401).json({ error: { message: 'Authentication required', statusCode: 401 } });
+      return;
+    }
+
+    const { id, userId: sharedWithUserId } = req.params;
+    const pool = getPool();
+    const sharedByUserId = req.user.userId;
+    
+    // Check if file exists and user owns it (or is admin)
+    const file = await checkFileAccess(pool, id, req);
+    if (!file) {
+      res.status(404).json({ error: { message: 'File not found', statusCode: 404 } });
+      return;
+    }
+    
+    // User must own the folder (or be admin) to unshare it
+    if (!isAdmin(req) && file.user_id !== sharedByUserId) {
+      res.status(403).json({ error: { message: 'You can only unshare folders you own', statusCode: 403 } });
+      return;
+    }
+    
+    // Delete the share
+    const result = await pool.query(
+      'DELETE FROM file_shares WHERE file_id = $1 AND shared_with_user_id = $2 RETURNING *',
+      [id, sharedWithUserId]
+    );
+    
+    if (result.rows.length === 0) {
+      res.status(404).json({ error: { message: 'Share not found', statusCode: 404 } });
+      return;
+    }
+    
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+}
+
+// Get list of users a folder is shared with
+export async function getFolderShares(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    if (!req.user?.userId) {
+      res.status(401).json({ error: { message: 'Authentication required', statusCode: 401 } });
+      return;
+    }
+
+    const { id } = req.params;
+    const pool = getPool();
+    const userId = req.user.userId;
+    
+    // Check if file exists and user owns it (or is admin)
+    const file = await checkFileAccess(pool, id, req);
+    if (!file) {
+      res.status(404).json({ error: { message: 'File not found', statusCode: 404 } });
+      return;
+    }
+    
+    // User must own the folder (or be admin) to see shares
+    if (!isAdmin(req) && file.user_id !== userId) {
+      res.status(403).json({ error: { message: 'You can only view shares for folders you own', statusCode: 403 } });
+      return;
+    }
+    
+    // Get all shares for this folder with user info
+    const result = await pool.query(
+      `SELECT fs.*, u.id as user_id, u.email, u.name, u.avatar_url
+       FROM file_shares fs
+       JOIN users u ON fs.shared_with_user_id = u.id
+       WHERE fs.file_id = $1
+       ORDER BY fs.created_at ASC`,
+      [id]
+    );
+    
+    res.json({ data: result.rows });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// Get folders shared with current user
+export async function getSharedFolders(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    if (!req.user?.userId) {
+      res.status(401).json({ error: { message: 'Authentication required', statusCode: 401 } });
+      return;
+    }
+
+    const pool = getPool();
+    const userId = req.user.userId;
+    
+    // Get all folders shared with this user
+    const result = await pool.query(
+      `SELECT DISTINCT f.*, fs.permission, u.id as owner_id, u.email as owner_email, u.name as owner_name
+       FROM files f
+       JOIN file_shares fs ON f.id = fs.file_id
+       JOIN users u ON f.user_id = u.id
+       WHERE fs.shared_with_user_id = $1
+       AND f.deleted = FALSE
+       AND f.type = 'folder'
+       ORDER BY f.created_at DESC`,
+      [userId]
+    );
+    
+    const baseUrl = getBaseUrl(req);
+    const files: File[] = result.rows.map((row: any) => {
+      const file = rowToFile(row as FileRow, baseUrl);
+      // Add share metadata
+      (file as any).sharePermission = row.permission;
+      (file as any).owner = {
+        id: row.owner_id,
+        email: row.owner_email,
+        name: row.owner_name,
+      };
+      return file;
+    });
+    
+    res.json({ data: files });
+  } catch (error) {
+    next(error);
+  }
 }
 

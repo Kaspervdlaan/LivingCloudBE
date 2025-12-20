@@ -9,6 +9,10 @@ import {
   copyFile,
   deleteFileById,
   downloadFile,
+  shareFolder,
+  unshareFolder,
+  getFolderShares,
+  getSharedFolders,
 } from '../controllers/filesController';
 import { upload } from '../middleware/upload';
 import { authenticate } from '../middleware/auth';
@@ -44,6 +48,18 @@ router.delete('/:id', deleteFileById);
 
 // Download file
 router.get('/:id/download', downloadFile);
+
+// Share folder
+router.post('/:id/share', shareFolder);
+
+// Unshare folder
+router.delete('/:id/share/:userId', unshareFolder);
+
+// Get folder shares
+router.get('/:id/shares', getFolderShares);
+
+// Get shared folders (for current user)
+router.get('/shared/folders', getSharedFolders);
 
 export default router;
 
