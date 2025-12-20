@@ -67,7 +67,7 @@ app.use(
 // Rate limiting for authentication endpoints
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs (allows for retries and multiple devices)
+  max: 1000, // Limit each IP to 1000 requests per windowMs (allows for retries and multiple devices)
   message: 'Too many authentication attempts, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
@@ -77,7 +77,7 @@ const authLimiter = rateLimit({
 // Rate limiting for file operations
 const fileLimiter = rateLimit({
   windowMs: 1 * 60 * 1000, // 1 minute
-  max: 100, // Limit each IP to 100 requests per minute
+  max: 1000, // Limit each IP to 1000 requests per minute
   message: 'Too many file operations, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,

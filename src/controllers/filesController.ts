@@ -33,12 +33,12 @@ function buildUserFilter(req: Request, paramIndex: number = 1): { clause: string
 // Helper to check if file exists and user has access (belongs to user or user is admin)
 async function checkFileAccess(pool: any, fileId: string, req: Request): Promise<FileRow | null> {
   if (isAdmin(req)) {
-    // Admin can access any file
+    // Admin can access any file (including deleted ones)
     const result = await pool.query('SELECT * FROM files WHERE id = $1', [fileId]);
     return result.rows.length > 0 ? (result.rows[0] as FileRow) : null;
   }
-  // Regular users can only access their own files
-  const result = await pool.query('SELECT * FROM files WHERE id = $1 AND user_id = $2', [fileId, req.user!.userId]);
+  // Regular users can only access their own non-deleted files
+  const result = await pool.query('SELECT * FROM files WHERE id = $1 AND user_id = $2 AND deleted = FALSE', [fileId, req.user!.userId]);
   return result.rows.length > 0 ? (result.rows[0] as FileRow) : null;
 }
 
@@ -76,6 +76,11 @@ export async function getFiles(req: Request, res: Response, next: NextFunction):
     
     let query = 'SELECT * FROM files WHERE 1=1' + userFilterClause;
     
+    // Regular users can't see deleted files, admins can see all
+    if (!isAdmin(req)) {
+      query += ` AND deleted = FALSE`;
+    }
+    
     if (parentId) {
       query += ` AND parent_id = $${paramIndex}`;
       params.push(parentId);
@@ -109,8 +114,13 @@ export async function getFileById(req: Request, res: Response, next: NextFunctio
     
     // Build user filter (admin bypasses)
     const userFilter = buildUserFilter(req, 2);
-    const query = `SELECT * FROM files WHERE id = $1${userFilter.clause}`;
+    let query = `SELECT * FROM files WHERE id = $1${userFilter.clause}`;
     const params: any[] = [id, ...userFilter.params];
+    
+    // Regular users can't see deleted files, admins can see all
+    if (!isAdmin(req)) {
+      query += ' AND deleted = FALSE';
+    }
     
     const result = await pool.query(query, params);
     
@@ -407,6 +417,7 @@ export async function deleteFileById(req: Request, res: Response, next: NextFunc
     const { id } = req.params;
     const pool = getPool();
     const userId = req.user.userId;
+    const isAdminUser = isAdmin(req);
     
     // Get file info and verify user has access
     const file = await checkFileAccess(pool, id, req);
@@ -415,8 +426,13 @@ export async function deleteFileById(req: Request, res: Response, next: NextFunc
       return;
     }
     
-    // Delete recursively (admin can delete any file, regular users only their own)
-    await deleteFileRecursive(pool, file, isAdmin(req));
+    if (isAdminUser) {
+      // Admin: Hard delete (permanently delete)
+      await deleteFileRecursive(pool, file, true);
+    } else {
+      // Regular user: Soft delete (set deleted = true)
+      await softDeleteFileRecursive(pool, file, userId);
+    }
     
     res.status(204).send();
   } catch (error) {
@@ -473,10 +489,10 @@ async function checkIfDescendant(pool: any, folderId: string, ancestorId: string
     return true;
   }
   
-  // Admin can check across all files, regular users only their own
+  // Admin can check across all files (including deleted), regular users only their own non-deleted files
   const query = isAdminUser 
     ? 'SELECT parent_id FROM files WHERE id = $1'
-    : 'SELECT parent_id FROM files WHERE id = $1 AND user_id = $2';
+    : 'SELECT parent_id FROM files WHERE id = $1 AND user_id = $2 AND deleted = FALSE';
   const params = isAdminUser ? [folderId] : [folderId, userId];
   
   const result = await pool.query(query, params);
@@ -528,8 +544,8 @@ async function copyFileRecursive(pool: any, file: FileRow, destinationId: string
     
     const newFolder = folderResult.rows[0] as FileRow;
     
-    // Copy children (only those belonging to the same user)
-    const childrenResult = await pool.query('SELECT * FROM files WHERE parent_id = $1 AND user_id = $2', [file.id, userId]);
+    // Copy children (only those belonging to the same user and not deleted)
+    const childrenResult = await pool.query('SELECT * FROM files WHERE parent_id = $1 AND user_id = $2 AND deleted = FALSE', [file.id, userId]);
     for (const child of childrenResult.rows) {
       await copyFileRecursive(pool, child as FileRow, newFolder.id, userId);
     }
@@ -538,7 +554,27 @@ async function copyFileRecursive(pool: any, file: FileRow, destinationId: string
   }
 }
 
-// Helper: Delete file/folder recursively
+// Helper: Soft delete file/folder recursively (set deleted = true)
+async function softDeleteFileRecursive(pool: any, file: FileRow, userId: string): Promise<void> {
+  if (file.type === 'folder') {
+    // Soft delete children first (only user's own files)
+    const childrenResult = await pool.query(
+      'SELECT * FROM files WHERE parent_id = $1 AND user_id = $2 AND deleted = FALSE',
+      [file.id, userId]
+    );
+    for (const child of childrenResult.rows) {
+      await softDeleteFileRecursive(pool, child as FileRow, userId);
+    }
+  }
+  
+  // Set deleted = true (only user's own files)
+  await pool.query(
+    'UPDATE files SET deleted = TRUE, updated_at = NOW() WHERE id = $1 AND user_id = $2',
+    [file.id, userId]
+  );
+}
+
+// Helper: Hard delete file/folder recursively (permanently delete - admin only)
 async function deleteFileRecursive(pool: any, file: FileRow, isAdminUser: boolean): Promise<void> {
   if (file.type === 'file') {
     // Delete file from filesystem
@@ -549,7 +585,7 @@ async function deleteFileRecursive(pool: any, file: FileRow, isAdminUser: boolea
       await deleteFile(file.thumbnail_path);
     }
   } else {
-    // Delete children first (admin deletes all children, regular users only their own)
+    // Delete children first (admin deletes all children)
     const childrenQuery = isAdminUser
       ? 'SELECT * FROM files WHERE parent_id = $1'
       : 'SELECT * FROM files WHERE parent_id = $1 AND user_id = $2';

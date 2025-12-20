@@ -10,6 +10,7 @@ export interface FileRow {
   extension: string | null;
   file_path: string | null;
   thumbnail_path: string | null;
+  deleted: boolean;
   created_at: Date;
   updated_at: Date;
 }

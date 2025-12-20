@@ -213,8 +213,9 @@ export async function googleCallback(req: Request, res: Response, next: NextFunc
         path: '/',
       });
       
-      // Redirect to frontend - token is now in cookie, not URL
-      res.redirect(`${frontendUrl}/auth/callback`);
+      // Also include token in URL for frontend to store in localStorage
+      // The frontend will extract it and store it, then remove it from URL
+      res.redirect(`${frontendUrl}/auth/callback?token=${encodeURIComponent(token)}`);
     } catch (error) {
       res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:5173'}/login?error=token_generation_failed`);
     }

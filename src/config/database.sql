@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS files (
     extension VARCHAR(10),
     file_path VARCHAR(500),
     thumbnail_path VARCHAR(500),
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -29,6 +30,9 @@ CREATE INDEX IF NOT EXISTS idx_files_type ON files(type);
 
 -- Create index on user_id for faster user-specific queries
 CREATE INDEX IF NOT EXISTS idx_files_user_id ON files(user_id);
+
+-- Create index on deleted for faster filtering
+CREATE INDEX IF NOT EXISTS idx_files_deleted ON files(deleted);
 
 -- Create function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()
